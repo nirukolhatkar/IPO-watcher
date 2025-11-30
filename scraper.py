@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 
 
 def scrape_ipowatch():
-    url = 'https://ipowatch.in/'
+    url = 'https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/'
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
 
