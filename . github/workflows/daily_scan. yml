@@ -3,7 +3,7 @@ name: IPO GMP Watcher
 on:
   schedule:
     - cron: '*/30 * * * *'  # Runs every 30 minutes
-  workflow_dispatch:        # Allow manual trigger
+  workflow_dispatch:        # Manual trigger button
 
 jobs:
   check_ipos:
@@ -19,13 +19,15 @@ jobs:
           python-version: '3.11'
 
       - name: Install Dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run IPO Watcher Check
+      - name: Create Data Directory
+        run: mkdir -p data
+
+      - name: Run IPO Watcher
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets. TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets. TELEGRAM_CHAT_ID }}
         run: |
           python3 << 'EOF'
           import json
@@ -38,7 +40,7 @@ jobs:
           from notifier import send_telegram_notification
           from db import init_db, get_ipo, upsert_ipo
 
-          # Setup
+          # Setup database
           os.makedirs('data', exist_ok=True)
           init_db('data/ipo_watcher.db')
 
@@ -48,78 +50,66 @@ jobs:
           gmp_threshold = 20
 
           if not bot_token or not chat_id:
-              print("❌ ERROR: Telegram credentials not found in GitHub Secrets!")
+              print("❌ ERROR: Telegram credentials not found!")
               sys.exit(1)
 
           print("🚀 Starting IPO Check...")
           print(f"⏰ Time: {datetime.now().isoformat()}")
 
           try:
-              # Fetch IPOs from ipowatch.in
+              # Fetch IPOs
+              print("📥 Fetching IPOs from ipowatch.in...")
               ipos = get_ipos_from_url('https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/')
-              print(f"📊 Found {len(ipos)} IPOs on the page")
+              print(f"📊 Found {len(ipos)} IPOs")
 
-              # Check each IPO
-              high_gmp_ipos = []
+              # Find high GMP IPOs
+              high_gmp_count = 0
               for ipo in ipos:
                   if ipo['gmp'] > gmp_threshold:
-                      high_gmp_ipos.append(ipo)
-                      print(f"  ✅ {ipo['name']}: {ipo['gmp']}% GMP (> {gmp_threshold}%)")
-
-              if high_gmp_ipos:
-                  print(f"\n🎯 Found {len(high_gmp_ipos)} IPO(s) with GMP > {gmp_threshold}%")
-              else:
-                  print(f"\n⚠️  No IPOs with GMP > {gmp_threshold}% found")
-
-              # Send notifications
-              for ipo in high_gmp_ipos:
-                  current = get_ipo('data/ipo_watcher.db', ipo['id'])
-                  should_notify = not current or (current and current['last_notified'] is None)
-
-                  if should_notify:
-                      # Build message
-                      msg = f"*🚀 IPO ALERT - GMP > {gmp_threshold}%*\n\n"
-                      msg += f"*Company:* {ipo. get('name', 'N/A')}\n"
-                      msg += f"*GMP:* {ipo. get('gmp', 'N/A')}% 📈\n"
+                      high_gmp_count += 1
+                      print(f"  ✅ {ipo['name']}: {ipo['gmp']}% GMP")
                       
-                      if ipo.get('subscription'):
-                          msg += f"*Current Subscription:* {ipo. get('subscription')}\n"
-                      if ipo.get('issue_size'):
-                          msg += f"*Total IPO Amount:* {ipo. get('issue_size')}\n"
-                      if ipo.get('price_band'):
-                          msg += f"*Price Band:* {ipo.get('price_band')}\n"
-                      if ipo.get('lot_size'):
-                          msg += f"*Lot Size:* {ipo.get('lot_size')}\n"
-                      if ipo.get('listing_date'):
-                          msg += f"*Listing Date:* {ipo.get('listing_date')}\n"
-                      
-                      msg += f"\n[📰 More Details]({ipo. get('link', 'https://ipowatch.in')})"
+                      # Check if we should notify
+                      current = get_ipo('data/ipo_watcher.db', ipo['id'])
+                      should_notify = not current or (current and current['last_notified'] is None)
 
-                      # Send notification
-                      try:
-                          send_telegram_notification(msg, bot_token, chat_id)
-                          print(f"  ✅ Telegram notification sent for {ipo['name']}")
+                      if should_notify:
+                          # Build message
+                          msg = f"🚀 *IPO ALERT - GMP > {gmp_threshold}%*\n\n"
+                          msg += f"*Company:* {ipo. get('name', 'N/A')}\n"
+                          msg += f"*GMP:* {ipo. get('gmp', 'N/A')}% 📈\n"
                           
-                          # Mark as notified in DB
-                          upsert_ipo('data/ipo_watcher. db', ipo['id'], ipo['name'], ipo['link'], ipo['gmp'], notified=True)
-                      except Exception as e:
-                          print(f"  ❌ Failed to send notification: {e}")
-                  else:
-                      print(f"  ℹ️  Already notified for {ipo['name']}")
+                          if ipo.get('subscription'):
+                              msg += f"*Subscription:* {ipo. get('subscription')}\n"
+                          if ipo.get('issue_size'):
+                              msg += f"*Issue Size:* {ipo.get('issue_size')}\n"
+                          if ipo.get('price_band'):
+                              msg += f"*Price Band:* {ipo.get('price_band')}\n"
+                          if ipo.get('lot_size'):
+                              msg += f"*Lot Size:* {ipo.get('lot_size')}\n"
+                          if ipo.get('listing_date'):
+                              msg += f"*Listing Date:* {ipo.get('listing_date')}\n"
+                          
+                          msg += f"\n[📰 More Info]({ipo.get('link', 'https://ipowatch.in')})"
 
-              print("\n✅ IPO Check completed successfully!")
+                          # Send notification
+                          try:
+                              send_telegram_notification(msg, bot_token, chat_id)
+                              print(f"  ✅ Notification sent for {ipo['name']}")
+                              upsert_ipo('data/ipo_watcher. db', ipo['id'], ipo['name'], ipo['link'], ipo['gmp'], notified=True)
+                          except Exception as e:
+                              print(f"  ❌ Failed to notify: {e}")
+
+              if high_gmp_count == 0:
+                  print(f"\n⚠️  No IPOs with GMP > {gmp_threshold}%")
+              else:
+                  print(f"\n✅ Processed {high_gmp_count} high-GMP IPO(s)")
 
           except Exception as e:
               print(f"❌ ERROR: {str(e)}")
               import traceback
               traceback.print_exc()
-              
-              # Send error notification
-              error_msg = f"❌ *IPO Watcher Error*\n\n{str(e)}"
-              try:
-                  send_telegram_notification(error_msg, bot_token, chat_id)
-              except:
-                  pass
               sys.exit(1)
 
+          print("✅ IPO Watcher Check Completed!")
           EOF
